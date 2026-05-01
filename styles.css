@@ -15,3 +15,14 @@ html, body, #root { height: 100%; }
   .label  { @apply text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1 block; }
   .badge  { @apply inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700; }
 }
+
+/* Print styles for route sheets */
+@media print {
+  body { background: white !important; }
+  aside, .no-print { display: none !important; }
+  main { overflow: visible !important; }
+  .print-area { display: block !important; }
+  .card { box-shadow: none !important; border: 1px solid #e2e8f0 !important; }
+  .leaflet-container { display: none !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
