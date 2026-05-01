@@ -82,6 +82,7 @@ export async function geocodeBatch(
       a.geocodeStatus = 'failed'; a.geocodeMessage = (err as Error).message;
     }
 
+    onEach?.(a, i);
     onProgress?.(i + 1, total);
   }
   return updated;
