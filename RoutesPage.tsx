@@ -31,6 +31,35 @@ function nearestNeighbor(pts: Address[]): Address[] {
   return route;
 }
 
+/** 2-opt improvement: repeatedly swap pairs of edges to reduce total distance */
+function twoOpt(route: Address[]): Address[] {
+  if (route.length < 4) return route;
+  let best = [...route];
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < best.length - 1; i++) {
+      for (let j = i + 2; j < best.length; j++) {
+        // Skip wrap-around edge for open routes
+        if (i === 0 && j === best.length - 1) continue;
+        const before = haversine(best[i], best[i + 1]) + haversine(best[j], best[(j + 1) % best.length]);
+        const after  = haversine(best[i], best[j])     + haversine(best[i + 1], best[(j + 1) % best.length]);
+        if (after < before - 0.001) {
+          // Reverse the segment between i+1 and j
+          best = [...best.slice(0, i + 1), ...best.slice(i + 1, j + 1).reverse(), ...best.slice(j + 1)];
+          improved = true;
+        }
+      }
+    }
+  }
+  return best;
+}
+
+/** Full shortest-distance optimization: nearest-neighbor seed + 2-opt refinement */
+function optimizeRoute(pts: Address[]): Address[] {
+  return twoOpt(nearestNeighbor(pts));
+}
+
 function routeMiles(stops: Address[]): number {
   let t = 0;
   for (let i = 1; i < stops.length; i++) t += haversine(stops[i - 1], stops[i]);
@@ -158,7 +187,7 @@ export default function RoutesPage() {
       }
     }
 
-    const optimizedGroups: RouteGroup[] = rawGroups.filter((g) => g.pts.length > 0).map((g) => ({ ...g, addresses: nearestNeighbor(g.pts) }));
+    const optimizedGroups: RouteGroup[] = rawGroups.filter((g) => g.pts.length > 0).map((g) => ({ ...g, addresses: optimizeRoute(g.pts) }));
     setGroups(optimizedGroups);
     setOptimized(true);
     setRoutes(optimizedGroups.map((g, i) => ({

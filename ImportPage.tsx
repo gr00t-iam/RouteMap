@@ -2,7 +2,7 @@ import { useRef, useState, useCallback } from 'react';
 import Papa from 'papaparse';
 import { useApp } from './store';
 import type { Address } from './store';
-import { geocodeBatch } from './geocoder';
+import { geocodeBatch, geocodeSingle } from './geocoder';
 
 // SheetJS is loaded via CDN in index.html as window.XLSX (no npm package needed)
 
@@ -69,6 +69,8 @@ export default function ImportPage() {
   const [gsUrl, setGsUrl] = useState('');
   const [gsLoading, setGsLoading] = useState(false);
   const [tab, setTab] = useState<'file' | 'gsheet'>('file');
+  // Per-row retry state: id → { editing, text, retrying }
+  const [retryState, setRetryState] = useState<Record<string, { editing: boolean; text: string; retrying: boolean }>>({});
 
   const loadRows = useCallback((hdrs: string[], data: Record<string, string>[]) => {
     setHeaders(hdrs); setRows(data); setMapping(autoDetectMapping(hdrs)); setStep('map'); setError('');
@@ -159,6 +161,24 @@ export default function ImportPage() {
     if (!confirm('Remove all imported addresses?')) return;
     setAddresses([]); setHeaders([]); setRows([]); setMapping({});
     setStep('idle'); setProgress(0);
+  };
+
+  // ── Per-row manual retry ────────────────────────────────────────────────
+  const startRetryEdit = (a: Address) => {
+    setRetryState((prev) => ({ ...prev, [a.id]: { editing: true, text: a.raw, retrying: false } }));
+  };
+
+  const handleRetry = async (a: Address) => {
+    const state = retryState[a.id];
+    const text = state?.text?.trim() || a.raw;
+    setRetryState((prev) => ({ ...prev, [a.id]: { ...prev[a.id], retrying: true } }));
+    const updated = await geocodeSingle(a, text);
+    upsertAddresses([updated]);
+    setRetryState((prev) => {
+      const n = { ...prev };
+      delete n[a.id];
+      return n;
+    });
   };
 
   const geocodedCount = addresses.filter((a) => a.geocodeStatus === 'geocoded').length;
@@ -300,34 +320,80 @@ export default function ImportPage() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 sticky top-0 z-10">
                   <tr>
-                    {['Address','City','State','ZIP','Status','Nav'].map((h) => (
+                    {['Address','City','State','ZIP','Status','Actions'].map((h) => (
                       <th key={h} className="text-left px-3 py-2 text-slate-500 font-medium">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {addresses.map((a) => (
-                    <tr key={a.id} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 max-w-[220px] truncate font-medium">{a.raw || String(a.street ?? '')}</td>
-                      <td className="px-3 py-2 text-slate-600">{String(a.city ?? '')}</td>
-                      <td className="px-3 py-2 text-slate-600">{String(a.state ?? '')}</td>
-                      <td className="px-3 py-2 text-slate-600">{String(a.zip ?? '')}</td>
-                      <td className="px-3 py-2">
-                        <span className={`badge ${
-                          a.geocodeStatus === 'geocoded' ? 'bg-green-100 text-green-700'
-                          : a.geocodeStatus === 'failed' ? 'bg-rose-100 text-rose-700'
-                          : 'bg-amber-100 text-amber-700'}`}>
-                          {a.geocodeStatus}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        {a.lat != null && (
-                          <a href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`}
-                            target="_blank" rel="noreferrer" className="text-blue-500 hover:underline text-xs">Maps ↗</a>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {addresses.map((a) => {
+                    const rs = retryState[a.id];
+                    const isFailed = a.geocodeStatus === 'failed';
+                    const isPending = a.geocodeStatus === 'pending';
+                    return (
+                      <tr key={a.id} className={`hover:bg-slate-50 ${isFailed ? 'bg-rose-50/40' : ''}`}>
+                        <td className="px-3 py-2 font-medium">
+                          {rs?.editing ? (
+                            <input
+                              className="input text-xs py-1"
+                              value={rs.text}
+                              onChange={(e) => setRetryState((p) => ({ ...p, [a.id]: { ...p[a.id], text: e.target.value } }))}
+                              onKeyDown={(e) => e.key === 'Enter' && handleRetry(a)}
+                              autoFocus
+                              placeholder="Correct address, then click Retry"
+                            />
+                          ) : (
+                            <span className="block max-w-[220px] truncate" title={a.raw}>{a.raw || String(a.street ?? '')}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">{String(a.city ?? '')}</td>
+                        <td className="px-3 py-2 text-slate-600">{String(a.state ?? '')}</td>
+                        <td className="px-3 py-2 text-slate-600">{String(a.zip ?? '')}</td>
+                        <td className="px-3 py-2">
+                          <span className={`badge ${
+                            a.geocodeStatus === 'geocoded' ? 'bg-green-100 text-green-700'
+                            : a.geocodeStatus === 'failed' ? 'bg-rose-100 text-rose-700'
+                            : 'bg-amber-100 text-amber-700'}`}>
+                            {rs?.retrying ? 'retrying…' : a.geocodeStatus}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            {/* Google Maps link for geocoded */}
+                            {a.lat != null && !rs?.editing && (
+                              <a href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`}
+                                target="_blank" rel="noreferrer" className="text-blue-500 hover:underline text-xs">Maps ↗</a>
+                            )}
+                            {/* Edit & Retry for failed/pending */}
+                            {(isFailed || isPending) && !rs?.editing && !rs?.retrying && (
+                              <button onClick={() => startRetryEdit(a)}
+                                className="text-xs text-amber-600 hover:text-amber-800 font-medium underline underline-offset-2">
+                                Edit &amp; Retry
+                              </button>
+                            )}
+                            {/* Quick retry (no edit) for failed */}
+                            {isFailed && !rs?.editing && !rs?.retrying && (
+                              <button onClick={() => handleRetry(a)}
+                                className="text-xs text-rose-600 hover:text-rose-800 font-medium underline underline-offset-2">
+                                Retry
+                              </button>
+                            )}
+                            {/* Confirm retry after editing */}
+                            {rs?.editing && (
+                              <>
+                                <button onClick={() => handleRetry(a)} disabled={rs.retrying}
+                                  className="text-xs bg-blue-500 text-white px-2 py-0.5 rounded hover:bg-blue-600">
+                                  {rs.retrying ? '…' : 'Retry'}
+                                </button>
+                                <button onClick={() => setRetryState((p) => { const n = { ...p }; delete n[a.id]; return n; })}
+                                  className="text-xs text-slate-400 hover:text-slate-600">Cancel</button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
