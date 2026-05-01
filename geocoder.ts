@@ -37,7 +37,8 @@ export async function geocodeNominatim(query: string): Promise<{ lat: number; ln
 
 export async function geocodeBatch(
   addresses: Address[],
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  onEach?: (addr: Address, index: number) => void
 ): Promise<Address[]> {
   const updated = addresses.map((a) => ({ ...a }));
   const total = updated.length;
