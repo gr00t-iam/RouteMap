@@ -3,7 +3,7 @@ import { useApp } from './store';
 import type { Address, Route, RouteStop, Technician } from './store';
 import MapView from './MapView';
 
-// ── Haversine distance in miles ──────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function haversine(a: Address, b: Address): number {
   const R = 3958.8;
   const dLat = ((b.lat! - a.lat!) * Math.PI) / 180;
@@ -14,177 +14,228 @@ function haversine(a: Address, b: Address): number {
   return R * 2 * Math.asin(Math.sqrt(h));
 }
 
-// ── Nearest-neighbor TSP ─────────────────────────────────────────────────────
 function nearestNeighbor(pts: Address[]): Address[] {
-  if (pts.length === 0) return [];
-  const remaining = [...pts];
-  const route: Address[] = [remaining.splice(0, 1)[0]];
-  while (remaining.length > 0) {
+  if (!pts.length) return [];
+  const rem = [...pts];
+  const route: Address[] = [rem.splice(0, 1)[0]];
+  while (rem.length) {
     const last = route[route.length - 1];
-    let bestIdx = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const d = haversine(last, remaining[i]);
-      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < rem.length; i++) {
+      const d = haversine(last, rem[i]);
+      if (d < bd) { bd = d; bi = i; }
     }
-    route.push(remaining.splice(bestIdx, 1)[0]);
+    route.push(rem.splice(bi, 1)[0]);
   }
   return route;
 }
 
-function routeTotalMiles(stops: Address[]): number {
-  let total = 0;
-  for (let i = 1; i < stops.length; i++) total += haversine(stops[i - 1], stops[i]);
-  return total;
+function routeMiles(stops: Address[]): number {
+  let t = 0;
+  for (let i = 1; i < stops.length; i++) t += haversine(stops[i - 1], stops[i]);
+  return t;
 }
 
-// ── Split addresses into N roughly-equal groups ──────────────────────────────
-function splitGroups(addresses: Address[], n: number, mode: 'stops' | 'distance'): Address[][] {
-  if (n === 1) return [addresses];
-  if (mode === 'stops') {
-    const size = Math.ceil(addresses.length / n);
-    const groups: Address[][] = [];
-    for (let i = 0; i < n; i++) groups.push(addresses.slice(i * size, (i + 1) * size));
-    return groups.filter((g) => g.length > 0);
-  }
-  // distance: sort by longitude then split
-  const sorted = [...addresses].sort((a, b) => (a.lng ?? 0) - (b.lng ?? 0));
-  const size = Math.ceil(sorted.length / n);
-  const groups: Address[][] = [];
-  for (let i = 0; i < n; i++) groups.push(sorted.slice(i * size, (i + 1) * size));
-  return groups.filter((g) => g.length > 0);
-}
-
-const ROUTE_COLORS = ['#3b82f6','#f97316','#a855f7','#10b981','#ec4899','#f59e0b','#6366f1','#14b8a6','#ef4444','#84cc16'];
 const SPLIT_LNG = -100;
+const FALLBACK_COLORS = ['#3b82f6','#f97316','#a855f7','#10b981','#ec4899','#f59e0b','#6366f1','#14b8a6'];
 
-type SplitMode = 'single' | 'east-west' | 'multi-day';
+type SplitMode = 'technician' | 'single' | 'east-west' | 'multi-day';
 type BalanceMode = 'stops' | 'distance';
 
 interface RouteGroup {
+  techId: string;
   label: string;
   color: string;
   addresses: Address[];
   day?: number;
 }
 
+// ── Export helpers ────────────────────────────────────────────────────────────
+async function exportXlsx(group: RouteGroup) {
+  const XLSX = await import('xlsx');
+  const data = group.addresses.map((a, i) => ({
+    '#': i + 1,
+    Address: a.raw || String(a.street ?? ''),
+    City: String(a.city ?? ''),
+    State: String(a.state ?? ''),
+    ZIP: String(a.zip ?? ''),
+    Lat: a.lat ?? '',
+    Lng: a.lng ?? '',
+    'Google Maps': `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  // Column widths
+  ws['!cols'] = [{ wch: 4 }, { wch: 40 }, { wch: 20 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 60 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, group.label.slice(0, 31));
+  XLSX.writeFile(wb, `${group.label.replace(/[^a-z0-9]/gi, '_')}.xlsx`);
+}
+
+async function exportPdf(group: RouteGroup) {
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+
+  // Header
+  doc.setFontSize(16);
+  doc.setTextColor(30, 30, 30);
+  doc.text(`Route Sheet — ${group.label}`, 14, 18);
+  doc.setFontSize(9);
+  doc.setTextColor(100, 100, 100);
+  doc.text(`${group.addresses.length} stops · ${routeMiles(group.addresses).toFixed(1)} mi · Generated ${new Date().toLocaleDateString()}`, 14, 25);
+
+  autoTable(doc, {
+    startY: 30,
+    head: [['#', 'Address', 'City', 'State', 'ZIP']],
+    body: group.addresses.map((a, i) => [
+      i + 1,
+      a.raw || String(a.street ?? ''),
+      String(a.city ?? ''),
+      String(a.state ?? ''),
+      String(a.zip ?? ''),
+    ]),
+    headStyles: { fillColor: [59, 130, 246], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { cellWidth: 10 },
+      1: { cellWidth: 80 },
+      2: { cellWidth: 40 },
+      3: { cellWidth: 16 },
+      4: { cellWidth: 20 },
+    },
+    styles: { fontSize: 9, cellPadding: 3 },
+    margin: { left: 14, right: 14 },
+  });
+
+  doc.save(`${group.label.replace(/[^a-z0-9]/gi, '_')}.pdf`);
+}
+
+function exportCsv(group: RouteGroup) {
+  const header = '#,Address,City,State,ZIP,Lat,Lng,GoogleMaps';
+  const rows = group.addresses.map((a, i) =>
+    [i + 1, a.raw || String(a.street ?? ''), a.city, a.state, a.zip, a.lat, a.lng,
+      `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`]
+      .map((v) => `"${v ?? ''}"`).join(',')
+  );
+  const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${group.label.replace(/[^a-z0-9]/gi, '_')}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function RoutesPage() {
-  const { addresses, setRoutes, routes } = useApp();
+  const { addresses, technicians, setRoutes } = useApp();
   const [splitMode, setSplitMode] = useState<SplitMode>('single');
   const [balanceMode, setBalanceMode] = useState<BalanceMode>('stops');
   const [days, setDays] = useState(2);
   const [groups, setGroups] = useState<RouteGroup[]>([]);
   const [optimized, setOptimized] = useState(false);
+  const [exporting, setExporting] = useState<string | null>(null);
   const printRef = useRef<HTMLDivElement>(null);
 
   const geocoded = addresses.filter((a) => a.lat != null && a.lng != null);
 
   const handleOptimize = () => {
-    let rawGroups: { label: string; color: string; pts: Address[]; day?: number }[] = [];
+    let rawGroups: { techId: string; label: string; color: string; pts: Address[]; day?: number }[] = [];
 
-    if (splitMode === 'single') {
-      rawGroups = [{ label: 'Route 1', color: ROUTE_COLORS[0], pts: geocoded }];
+    if (splitMode === 'technician' && technicians.length > 0) {
+      // Distribute stops across technicians (round-robin by geography)
+      const sorted = [...geocoded].sort((a, b) => (a.lng ?? 0) - (b.lng ?? 0));
+      technicians.forEach((t, i) => {
+        const pts = sorted.filter((_, idx) => idx % technicians.length === i);
+        rawGroups.push({ techId: t.id, label: t.name, color: t.color, pts });
+      });
+    } else if (splitMode === 'single') {
+      rawGroups = [{ techId: 'single', label: 'Route 1', color: technicians[0]?.color ?? FALLBACK_COLORS[0], pts: geocoded }];
     } else if (splitMode === 'east-west') {
       const east = geocoded.filter((a) => (a.lng ?? 0) >= SPLIT_LNG);
       const west = geocoded.filter((a) => (a.lng ?? 0) < SPLIT_LNG);
       rawGroups = [
-        { label: 'East Coast', color: ROUTE_COLORS[0], pts: east },
-        { label: 'West Coast', color: ROUTE_COLORS[1], pts: west },
+        { techId: 'east', label: technicians[0]?.name ?? 'East Coast', color: technicians[0]?.color ?? FALLBACK_COLORS[0], pts: east },
+        { techId: 'west', label: technicians[1]?.name ?? 'West Coast', color: technicians[1]?.color ?? FALLBACK_COLORS[1], pts: west },
       ];
     } else {
       // multi-day
-      const dayGroups = splitGroups(geocoded, days, balanceMode);
-      rawGroups = dayGroups.map((pts, i) => ({
-        label: `Day ${i + 1}`,
-        color: ROUTE_COLORS[i % ROUTE_COLORS.length],
-        pts,
-        day: i + 1,
-      }));
+      const n = days;
+      const sorted = balanceMode === 'distance'
+        ? [...geocoded].sort((a, b) => (a.lng ?? 0) - (b.lng ?? 0))
+        : geocoded;
+      const size = Math.ceil(sorted.length / n);
+      for (let i = 0; i < n; i++) {
+        const pts = sorted.slice(i * size, (i + 1) * size);
+        if (!pts.length) continue;
+        const t = technicians[i];
+        rawGroups.push({ techId: t?.id ?? `day-${i}`, label: t?.name ?? `Day ${i + 1}`, color: t?.color ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length], pts, day: i + 1 });
+      }
     }
 
-    const optimizedGroups: RouteGroup[] = rawGroups.map((g) => ({
-      label: g.label,
-      color: g.color,
-      addresses: nearestNeighbor(g.pts),
-      day: g.day,
-    }));
+    const optimizedGroups: RouteGroup[] = rawGroups
+      .filter((g) => g.pts.length > 0)
+      .map((g) => ({ ...g, addresses: nearestNeighbor(g.pts) }));
 
     setGroups(optimizedGroups);
     setOptimized(true);
 
-    // Persist to store as Route objects
-    const fakeTechs: Technician[] = optimizedGroups.map((g, i) => ({
-      id: `tech-${i}`,
-      name: g.label,
-      color: g.color,
-    }));
     const storeRoutes: Route[] = optimizedGroups.map((g, i) => ({
       id: `route-${i}`,
-      technicianId: `tech-${i}`,
+      technicianId: g.techId,
       stops: g.addresses.map((a, order): RouteStop => ({ addressId: a.id, order })),
       day: g.day,
     }));
     setRoutes(storeRoutes);
-    // store technicians via inline upsert (not exported from store separately)
-    void fakeTechs; // used in MapView via routes
   };
 
-  const exportCsv = (group: RouteGroup) => {
-    const header = 'Order,Address,City,State,ZIP,Lat,Lng,GoogleMaps';
-    const rows = group.addresses.map((a, i) => {
-      const gmaps = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`;
-      return [i + 1, a.raw || a.street, a.city, a.state, a.zip, a.lat, a.lng, gmaps]
-        .map((v) => `"${v ?? ''}"`)
-        .join(',');
-    });
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${group.label.replace(/\s/g, '_')}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+  const handleExport = async (group: RouteGroup, format: 'pdf' | 'xlsx' | 'csv') => {
+    const key = `${group.techId}-${format}`;
+    setExporting(key);
+    try {
+      if (format === 'pdf') await exportPdf(group);
+      else if (format === 'xlsx') await exportXlsx(group);
+      else exportCsv(group);
+    } catch (err) {
+      alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExporting(null);
+    }
   };
 
-  const handlePrint = () => window.print();
-
-  const allOptimizedAddresses = groups.flatMap((g) => g.addresses);
+  const allAddrs = groups.flatMap((g) => g.addresses);
   const fakeRoutes: Route[] = groups.map((g, i) => ({
-    id: `route-${i}`,
-    technicianId: `tech-${i}`,
+    id: `route-${i}`, technicianId: g.techId,
     stops: g.addresses.map((a, order): RouteStop => ({ addressId: a.id, order })),
   }));
-  const fakeTechnicians: Technician[] = groups.map((g, i) => ({
-    id: `tech-${i}`,
-    name: g.label,
-    color: g.color,
-  }));
+  const fakeTechs: Technician[] = groups.map((g) => ({ id: g.techId, name: g.label, color: g.color }));
 
   return (
     <div className="p-4 max-w-5xl mx-auto space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-xl font-bold text-slate-800">Route Optimizer</h1>
         {optimized && (
-          <button className="btn-ghost text-sm" onClick={handlePrint}>
+          <button className="btn-ghost text-sm no-print" onClick={() => window.print()}>
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.75 19.5m10.56-5.671L17.25 19.5m0 0l.345 2.623A1.5 1.5 0 0116.11 23.7H7.89a1.5 1.5 0 01-1.485-1.577L6.75 19.5m10.5 0H6.75" />
             </svg>
-            Print Route Sheet
+            Print All Routes
           </button>
         )}
       </div>
 
-      {/* Options */}
+      {/* Options card */}
       <div className="card p-4 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="label">Split Mode</label>
             <select className="input" value={splitMode} onChange={(e) => setSplitMode(e.target.value as SplitMode)}>
+              {technicians.length > 0 && <option value="technician">By Technician ({technicians.length})</option>}
               <option value="single">Single Route</option>
               <option value="east-west">East / West Split</option>
               <option value="multi-day">Multi-Day Planning</option>
             </select>
+            {splitMode === 'technician' && technicians.length === 0 && (
+              <p className="text-xs text-amber-600 mt-1">Add technicians on the Technicians page first.</p>
+            )}
           </div>
           <div>
             <label className="label">Balance By</label>
@@ -196,23 +247,17 @@ export default function RoutesPage() {
           {splitMode === 'multi-day' && (
             <div>
               <label className="label">Number of Days</label>
-              <input
-                type="number"
-                min={2}
-                max={14}
-                className="input"
-                value={days}
-                onChange={(e) => setDays(Math.max(2, Math.min(14, Number(e.target.value))))}
-              />
+              <input type="number" min={2} max={14} className="input" value={days}
+                onChange={(e) => setDays(Math.max(2, Math.min(14, Number(e.target.value))))} />
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            className="btn-primary"
-            disabled={geocoded.length === 0}
-            onClick={handleOptimize}
-          >
+        <div className="flex items-center gap-3 flex-wrap">
+          <button className="btn-primary" disabled={geocoded.length === 0} onClick={handleOptimize}>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
             {geocoded.length === 0 ? 'No geocoded addresses' : `Optimize ${geocoded.length} Stops`}
           </button>
           {geocoded.length === 0 && addresses.length > 0 && (
@@ -221,41 +266,57 @@ export default function RoutesPage() {
         </div>
       </div>
 
-      {/* Map preview */}
+      {/* Map */}
       {optimized && groups.length > 0 && (
-        <div className="card overflow-hidden" style={{ height: 360 }}>
-          <MapView
-            addresses={allOptimizedAddresses}
-            technicians={fakeTechnicians}
-            routes={fakeRoutes}
-          />
+        <div className="card overflow-hidden no-print" style={{ height: 360 }}>
+          <MapView addresses={allAddrs} technicians={fakeTechs} routes={fakeRoutes} />
         </div>
       )}
 
-      {/* Route sheets — printable */}
+      {/* Route sheets */}
       {optimized && (
         <div ref={printRef} className="space-y-4 print-area">
           {groups.map((group) => {
-            const miles = routeTotalMiles(group.addresses);
+            const miles = routeMiles(group.addresses);
+            const isExporting = (fmt: string) => exporting === `${group.techId}-${fmt}`;
             return (
-              <div key={group.label} className="card overflow-hidden">
-                <div
-                  className="px-4 py-3 flex items-center justify-between"
-                  style={{ backgroundColor: group.color + '20', borderBottom: `3px solid ${group.color}` }}
-                >
+              <div key={group.techId} className="card overflow-hidden">
+                {/* Header */}
+                <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2"
+                  style={{ backgroundColor: group.color + '18', borderBottom: `3px solid ${group.color}` }}>
                   <div>
-                    <h2 className="font-bold text-slate-800">{group.label}</h2>
+                    <h2 className="font-bold text-slate-800 text-lg">{group.label}</h2>
                     <p className="text-xs text-slate-500">
-                      {group.addresses.length} stops · {miles.toFixed(1)} mi total
+                      {group.addresses.length} stops · {miles.toFixed(1)} mi estimated
                     </p>
                   </div>
-                  <button
-                    className="btn-ghost text-xs no-print"
-                    onClick={() => exportCsv(group)}
-                  >
-                    Export CSV
-                  </button>
+                  {/* Export buttons */}
+                  <div className="flex gap-2 no-print flex-wrap">
+                    <button
+                      className="btn-ghost text-xs border border-slate-200"
+                      onClick={() => handleExport(group, 'csv')}
+                      disabled={!!exporting}
+                    >
+                      ⬇ CSV
+                    </button>
+                    <button
+                      className="btn-ghost text-xs border border-slate-200"
+                      onClick={() => handleExport(group, 'xlsx')}
+                      disabled={!!exporting}
+                    >
+                      {isExporting('xlsx') ? 'Exporting…' : '⬇ Excel (.xlsx)'}
+                    </button>
+                    <button
+                      className="btn-primary text-xs"
+                      onClick={() => handleExport(group, 'pdf')}
+                      disabled={!!exporting}
+                    >
+                      {isExporting('pdf') ? 'Generating…' : '⬇ PDF'}
+                    </button>
+                  </div>
                 </div>
+
+                {/* Table */}
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50">
@@ -271,19 +332,18 @@ export default function RoutesPage() {
                     <tbody className="divide-y divide-slate-100">
                       {group.addresses.map((a, i) => (
                         <tr key={a.id} className="hover:bg-slate-50">
-                          <td className="px-3 py-2 text-slate-400 font-mono">{i + 1}</td>
-                          <td className="px-3 py-2 font-medium">{a.raw || (a.street as string)}</td>
-                          <td className="px-3 py-2 text-slate-600">{a.city as string}</td>
-                          <td className="px-3 py-2 text-slate-600">{a.state as string}</td>
-                          <td className="px-3 py-2 text-slate-600">{a.zip as string}</td>
+                          <td className="px-3 py-2 text-slate-400 font-mono text-xs">{i + 1}</td>
+                          <td className="px-3 py-2 font-medium">{a.raw || String(a.street ?? '')}</td>
+                          <td className="px-3 py-2 text-slate-600">{String(a.city ?? '')}</td>
+                          <td className="px-3 py-2 text-slate-600">{String(a.state ?? '')}</td>
+                          <td className="px-3 py-2 text-slate-600">{String(a.zip ?? '')}</td>
                           <td className="px-3 py-2 no-print">
                             <a
                               href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`}
-                              target="_blank"
-                              rel="noreferrer"
+                              target="_blank" rel="noreferrer"
                               className="text-blue-500 hover:underline text-xs"
                             >
-                              Google Maps
+                              Google Maps ↗
                             </a>
                           </td>
                         </tr>
