@@ -5,7 +5,6 @@ import TechniciansPage from '@/pages/TechniciansPage';
 import RoutesPage from '@/pages/RoutesPage';
 import SettingsPage from '@/pages/SettingsPage';
 
-
 const nav = [
   {
     to: '/', label: 'Dashboard', end: true,
@@ -30,9 +29,8 @@ const nav = [
 ];
 
 export default function App() {
-  
   return (
-    <div className="flex h-screen overflow-hidden" style={{backgroundColor:'#505a64'}}>
+    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#505a64' }}>
       <aside className="w-56 shrink-0 flex flex-col bg-slate-900 shadow-xl">
         <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-700">
           <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500">
@@ -64,23 +62,19 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
-        <div className="px-4 py-4 border-t border-slate-700">
-          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
-            supaReady ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
-          }`}>
-            </aside>
+      </aside>
       <div className="flex-1 flex flex-col overflow-hidden">
         <main className="flex-1 overflow-y-auto">
           <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/import" element={<ImportPage />} />
+            <Route path="/"            element={<DashboardPage />} />
+            <Route path="/import"      element={<ImportPage />} />
             <Route path="/technicians" element={<TechniciansPage />} />
-            <Route path="/routes" element={<RoutesPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/routes"      element={<RoutesPage />} />
+            <Route path="/settings"    element={<SettingsPage />} />
           </Routes>
         </main>
-        <footer className="shrink-0 border-t border-slate-200 bg-white text-xs text-slate-400 px-6 py-2 flex justify-between">
-          <span>Geocoding · U.S. Census Bureau · Routing · OSRM · Maps · OpenStreetMap</span>
+        <footer className="shrink-0 border-t border-slate-700 bg-slate-900 text-xs text-slate-400 px-6 py-2 flex justify-between">
+          <span>Geocoding · U.S. Census Bureau · Routing · OpenStreetMap · No data leaves your browser</span>
           <span>v0.1</span>
         </footer>
       </div>
