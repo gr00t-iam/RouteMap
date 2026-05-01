@@ -32,7 +32,7 @@ const nav = [
 export default function App() {
   const supaReady = isSupabaseConfigured();
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen overflow-hidden" style={{backgroundColor:'#505a64'}}>
       <aside className="w-56 shrink-0 flex flex-col bg-slate-900 shadow-xl">
         <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-700">
           <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500">
