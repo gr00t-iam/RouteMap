@@ -5,7 +5,7 @@ import { useApp } from '@/lib/store';
 import type { Address } from '@/types';
 
 export default function ImportPage() {
-  const { addresses, setAddresses } = useApp();
+  const { addresses, setAddresses, upsertAddresses } = useApp();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -49,7 +49,11 @@ export default function ImportPage() {
     setBusy('Geocoding via Census...');
     setProgress({ done: 0, total: addresses.length });
     try {
-      const updated = await geocodeBatch(addresses, (done, total) => setProgress({ done, total }));
+      const updated = await geocodeBatch(
+        addresses,
+        (done, total) => setProgress({ done, total }),
+        (addr) => upsertAddresses([addr])
+      );
       setAddresses(updated);
     } catch (err) {
       setError((err as Error).message);
@@ -58,7 +62,6 @@ export default function ImportPage() {
       setProgress(null);
     }
   }
-
   const matched = addresses.filter((a) => a.geocodeStatus === 'matched').length;
 
   return (
