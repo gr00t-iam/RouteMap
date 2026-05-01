@@ -36,8 +36,8 @@ interface Props {
 function FitBounds({ addresses }: { addresses: Address[] }) {
   const map = useMap();
   useEffect(() => {
-    const pts = addresses.filter((a) => a.lat !== null && a.lng !== null);
-    if (pts.length === 0) return;
+    const pts = addresses.filter((a) => a.lat != null && a.lng != null);
+    if (a.lat == null || a.lng == null) return null;
     const bounds = L.latLngBounds(pts.map((a) => [a.lat as number, a.lng as number]));
     map.fitBounds(bounds, { padding: [40, 40] });
   }, [addresses, map]);
