@@ -8,6 +8,7 @@ export interface Address {
   city?: string;
   state?: string;
   zip?: string;
+  storeNumber?: string;   // store/site ID — mapped from import column
   lat?: number | null;
   lng?: number | null;
   geocodeStatus: 'pending' | 'geocoded' | 'failed';

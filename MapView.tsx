@@ -246,8 +246,9 @@ export default function MapView({
                   <strong>{c.addresses.length} stops</strong>
                   <div className="max-h-40 overflow-y-auto mt-1">
                     {c.addresses.map((a) => (
-                      <div key={a.id} className="text-xs text-slate-600 py-0.5 border-b border-slate-100">
-                        {a.raw || a.street}
+                      <div key={a.id} className="text-xs text-slate-600 py-0.5 border-b border-slate-100 flex gap-1">
+                        {a.storeNumber && <span className="font-bold text-blue-600">#{a.storeNumber}</span>}
+                        <span>{a.raw || String(a.street ?? '')}</span>
                       </div>
                     ))}
                   </div>
@@ -266,7 +267,12 @@ export default function MapView({
               eventHandlers={{ click: () => setRadiusAddr(a) }}
             >
               <Popup>
-                <div className="text-sm min-w-[160px]">
+                <div className="text-sm min-w-[180px]">
+                  {a.storeNumber && (
+                    <p className="text-xs font-bold text-blue-600 bg-blue-50 rounded px-1.5 py-0.5 mb-1 inline-block">
+                      Store #{a.storeNumber}
+                    </p>
+                  )}
                   <p className="font-semibold">{a.raw || a.street}</p>
                   {a.city && <p className="text-xs text-slate-500">{a.city}, {a.state} {a.zip}</p>}
                   <p className="text-xs mt-1 capitalize text-slate-500">Status: {a.geocodeStatus}</p>

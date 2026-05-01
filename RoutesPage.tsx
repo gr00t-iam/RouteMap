@@ -1,9 +1,51 @@
 import { useState, useRef } from 'react';
 import { useApp } from './store';
 import type { Address, Route, RouteStop, Technician } from './store';
+import { getExtraColumns } from './ImportPage';
 import MapView from './MapView';
 
 // SheetJS loaded via CDN in index.html as window.XLSX (no npm package needed)
+
+// ── Territory detection ───────────────────────────────────────────────────────
+type Territory = 'contiguous' | 'hawaii' | 'alaska' | 'puerto_rico' | 'usvi' | 'guam' | 'international';
+
+const TERRITORY_LABELS: Record<Territory, string> = {
+  contiguous: 'Contiguous US',
+  hawaii: 'Hawaii',
+  alaska: 'Alaska',
+  puerto_rico: 'Puerto Rico',
+  usvi: 'US Virgin Islands',
+  guam: 'Guam / CNMI',
+  international: 'International',
+};
+
+function getTerritory(lat: number, lng: number): Territory {
+  if (lat >= 18.5 && lat <= 22.5 && lng >= -161 && lng <= -154) return 'hawaii';
+  if (lat >= 54 && lng <= -129) return 'alaska';
+  if (lat >= 17.5 && lat <= 18.6 && lng >= -68 && lng <= -65.5) return 'puerto_rico';
+  if (lat >= 17.5 && lat <= 18.5 && lng >= -65.5 && lng <= -64.5) return 'usvi';
+  if (lat >= 13 && lat <= 21 && lng >= 144 && lng <= 147) return 'guam';
+  if (lat >= 24 && lat <= 50 && lng >= -125 && lng <= -65) return 'contiguous';
+  return 'international';
+}
+
+/** Separate non-contiguous territories from contiguous US.
+ *  Returns { contiguous: Address[], territories: Map<Territory, Address[]> } */
+function partitionByTerritory(addresses: Address[]) {
+  const contiguous: Address[] = [];
+  const territories = new Map<Territory, Address[]>();
+  for (const a of addresses) {
+    if (a.lat == null || a.lng == null) continue;
+    const t = getTerritory(a.lat as number, a.lng as number);
+    if (t === 'contiguous') {
+      contiguous.push(a);
+    } else {
+      if (!territories.has(t)) territories.set(t, []);
+      territories.get(t)!.push(a);
+    }
+  }
+  return { contiguous, territories };
+}
 
 function haversine(a: Address, b: Address): number {
   const R = 3958.8;
@@ -84,18 +126,29 @@ function exportXlsx(group: RouteGroup) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const XLSX = (window as any).XLSX;
   if (!XLSX) { alert('Spreadsheet library not loaded. Refresh and try again.'); return; }
-  const data = group.addresses.map((a, i) => ({
-    '#': i + 1,
-    'Address': a.raw || String(a.street ?? ''),
-    'City': String(a.city ?? ''),
-    'State': String(a.state ?? ''),
-    'ZIP': String(a.zip ?? ''),
-    'Lat': a.lat ?? '',
-    'Lng': a.lng ?? '',
-    'Google Maps': `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`,
-  }));
+  const extraCols = getExtraColumns(group.addresses);
+  const data = group.addresses.map((a, i) => {
+    const row: Record<string, unknown> = { '#': i + 1 };
+    if (a.storeNumber) row['Store #'] = a.storeNumber;
+    row['Address'] = a.raw || String(a.street ?? '');
+    row['City'] = String(a.city ?? '');
+    row['State'] = String(a.state ?? '');
+    row['ZIP'] = String(a.zip ?? '');
+    // All original spreadsheet columns
+    for (const col of extraCols) row[col] = a[col] ?? '';
+    row['Lat'] = a.lat ?? '';
+    row['Lng'] = a.lng ?? '';
+    row['Google Maps'] = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`;
+    return row;
+  });
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = [{ wch: 4 }, { wch: 42 }, { wch: 20 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 60 }];
+  // Auto column widths: standard + extras
+  ws['!cols'] = [
+    { wch: 4 }, ...(data[0]?.['Store #'] !== undefined ? [{ wch: 12 }] : []),
+    { wch: 42 }, { wch: 20 }, { wch: 8 }, { wch: 10 },
+    ...extraCols.map(() => ({ wch: 18 })),
+    { wch: 10 }, { wch: 10 }, { wch: 60 },
+  ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, group.label.slice(0, 31));
   XLSX.writeFile(wb, `${group.label.replace(/[^a-z0-9]/gi, '_')}.xlsx`);
@@ -103,15 +156,28 @@ function exportXlsx(group: RouteGroup) {
 
 function exportPdf(group: RouteGroup) {
   const miles = routeMiles(group.addresses).toFixed(1);
-  const rows = group.addresses.map((a, i) =>
-    `<tr style="background:${i % 2 === 0 ? '#f8fafc' : '#fff'}">
+  const extraCols = getExtraColumns(group.addresses);
+  const hasStore = group.addresses.some((a) => a.storeNumber);
+
+  const headerCells = [
+    '<th>#</th>',
+    hasStore ? '<th>Store #</th>' : '',
+    '<th>Address</th><th>City</th><th>State</th><th>ZIP</th>',
+    ...extraCols.map((c) => `<th>${c}</th>`),
+  ].join('');
+
+  const rows = group.addresses.map((a, i) => {
+    const extraCells = extraCols.map((c) => `<td>${String(a[c] ?? '')}</td>`).join('');
+    return `<tr style="background:${i % 2 === 0 ? '#f8fafc' : '#fff'}">
       <td style="padding:5px 8px;color:#94a3b8;font-family:monospace">${i + 1}</td>
+      ${hasStore ? `<td style="padding:5px 8px;font-weight:700;color:#1d4ed8">${a.storeNumber ? '#' + a.storeNumber : ''}</td>` : ''}
       <td style="padding:5px 8px;font-weight:500">${a.raw || String(a.street ?? '')}</td>
       <td style="padding:5px 8px;color:#475569">${String(a.city ?? '')}</td>
       <td style="padding:5px 8px;color:#475569">${String(a.state ?? '')}</td>
       <td style="padding:5px 8px;color:#475569">${String(a.zip ?? '')}</td>
-    </tr>`
-  ).join('');
+      ${extraCells}
+    </tr>`;
+  }).join('');
 
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
     <title>${group.label} Route</title>
@@ -126,7 +192,7 @@ function exportPdf(group: RouteGroup) {
     </style></head><body>
     <h1>Route Sheet — ${group.label}</h1>
     <p class="meta">${group.addresses.length} stops &middot; ${miles} mi estimated &middot; ${new Date().toLocaleDateString()}</p>
-    <table><thead><tr><th>#</th><th>Address</th><th>City</th><th>State</th><th>ZIP</th></tr></thead>
+    <table><thead><tr style="background:${group.color}">${headerCells}</tr></thead>
     <tbody>${rows}</tbody></table>
     <script>window.onload=function(){window.print()}<\/script>
     </body></html>`;
@@ -136,16 +202,22 @@ function exportPdf(group: RouteGroup) {
 }
 
 function exportCsv(group: RouteGroup) {
-  const header = '#,Address,City,State,ZIP,Lat,Lng,GoogleMaps';
-  const rows = group.addresses.map((a, i) =>
-    [i + 1, a.raw || String(a.street ?? ''), a.city, a.state, a.zip, a.lat, a.lng,
-      `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`]
-      .map((v) => `"${v ?? ''}"`).join(',')
-  );
+  const extraCols = getExtraColumns(group.addresses);
+  const hasStore = group.addresses.some((a) => a.storeNumber);
+  const stdCols = ['#', ...(hasStore ? ['Store #'] : []), 'Address', 'City', 'State', 'ZIP', ...extraCols, 'Lat', 'Lng', 'GoogleMaps'];
+  const header = stdCols.map((c) => `"${c}"`).join(',');
+  const rows = group.addresses.map((a, i) => {
+    const vals: unknown[] = [i + 1];
+    if (hasStore) vals.push(a.storeNumber ?? '');
+    vals.push(a.raw || String(a.street ?? ''), a.city ?? '', a.state ?? '', a.zip ?? '');
+    for (const c of extraCols) vals.push(a[c] ?? '');
+    vals.push(a.lat ?? '', a.lng ?? '', `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`);
+    return vals.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',');
+  });
   const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `${group.label.replace(/[^a-z0-9]/gi, '_')}.csv`; a.click();
+  const el = document.createElement('a');
+  el.href = url; el.download = `${group.label.replace(/[^a-z0-9]/gi, '_')}.csv`; el.click();
   URL.revokeObjectURL(url);
 }
 
@@ -161,33 +233,57 @@ export default function RoutesPage() {
   const geocoded = addresses.filter((a) => a.lat != null && a.lng != null);
 
   const handleOptimize = () => {
+    // Step 1: separate non-contiguous territories (Hawaii, Alaska, PR, etc.)
+    const { contiguous, territories } = partitionByTerritory(geocoded);
+
+    // Step 2: build groups for contiguous US using the chosen split mode
     let rawGroups: { techId: string; label: string; color: string; pts: Address[]; day?: number }[] = [];
+    let colorIdx = 0;
 
     if (splitMode === 'technician' && technicians.length > 0) {
-      const sorted = [...geocoded].sort((a, b) => (a.lng ?? 0) - (b.lng ?? 0));
+      const sorted = [...contiguous].sort((a, b) => (a.lng ?? 0) - (b.lng ?? 0));
       technicians.forEach((t, i) => {
         rawGroups.push({ techId: t.id, label: t.name, color: t.color, pts: sorted.filter((_, idx) => idx % technicians.length === i) });
       });
+      colorIdx = technicians.length;
     } else if (splitMode === 'single') {
       const t = technicians[0];
-      rawGroups = [{ techId: t?.id ?? 'single', label: t?.name ?? 'Route 1', color: t?.color ?? FALLBACK_COLORS[0], pts: geocoded }];
+      rawGroups = [{ techId: t?.id ?? 'single', label: t?.name ?? 'Route', color: t?.color ?? FALLBACK_COLORS[0], pts: contiguous }];
+      colorIdx = 1;
     } else if (splitMode === 'east-west') {
       rawGroups = [
-        { techId: technicians[0]?.id ?? 'east', label: technicians[0]?.name ?? 'East Coast', color: technicians[0]?.color ?? FALLBACK_COLORS[0], pts: geocoded.filter((a) => (a.lng ?? 0) >= SPLIT_LNG) },
-        { techId: technicians[1]?.id ?? 'west', label: technicians[1]?.name ?? 'West Coast', color: technicians[1]?.color ?? FALLBACK_COLORS[1], pts: geocoded.filter((a) => (a.lng ?? 0) < SPLIT_LNG) },
+        { techId: technicians[0]?.id ?? 'east', label: technicians[0]?.name ?? 'East Coast', color: technicians[0]?.color ?? FALLBACK_COLORS[0], pts: contiguous.filter((a) => (a.lng ?? 0) >= SPLIT_LNG) },
+        { techId: technicians[1]?.id ?? 'west', label: technicians[1]?.name ?? 'West Coast', color: technicians[1]?.color ?? FALLBACK_COLORS[1], pts: contiguous.filter((a) => (a.lng ?? 0) < SPLIT_LNG) },
       ];
+      colorIdx = 2;
     } else {
-      const sorted = balanceMode === 'distance' ? [...geocoded].sort((a, b) => (a.lng ?? 0) - (b.lng ?? 0)) : geocoded;
+      const sorted = balanceMode === 'distance' ? [...contiguous].sort((a, b) => (a.lng ?? 0) - (b.lng ?? 0)) : contiguous;
       const size = Math.ceil(sorted.length / days);
       for (let i = 0; i < days; i++) {
         const pts = sorted.slice(i * size, (i + 1) * size);
         if (!pts.length) continue;
         const t = technicians[i];
         rawGroups.push({ techId: t?.id ?? `day-${i}`, label: t?.name ?? `Day ${i + 1}`, color: t?.color ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length], pts, day: i + 1 });
+        colorIdx++;
       }
     }
 
-    const optimizedGroups: RouteGroup[] = rawGroups.filter((g) => g.pts.length > 0).map((g) => ({ ...g, addresses: optimizeRoute(g.pts) }));
+    // Step 3: add each non-contiguous territory as its own separate route group
+    territories.forEach((pts, territory) => {
+      if (!pts.length) return;
+      const label = TERRITORY_LABELS[territory];
+      rawGroups.push({
+        techId: `territory-${territory}`,
+        label,
+        color: FALLBACK_COLORS[colorIdx++ % FALLBACK_COLORS.length],
+        pts,
+      });
+    });
+
+    const optimizedGroups: RouteGroup[] = rawGroups
+      .filter((g) => g.pts.length > 0)
+      .map((g) => ({ ...g, addresses: optimizeRoute(g.pts) }));
+
     setGroups(optimizedGroups);
     setOptimized(true);
     setRoutes(optimizedGroups.map((g, i) => ({
@@ -213,6 +309,22 @@ export default function RoutesPage() {
           </button>
         )}
       </div>
+
+      {/* Territory notice */}
+      {(() => {
+        const { territories } = partitionByTerritory(geocoded);
+        if (territories.size === 0) return null;
+        const names = Array.from(territories.entries()).map(([t, pts]) => `${TERRITORY_LABELS[t]} (${pts.length})`);
+        return (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800 flex gap-2">
+            <span className="text-lg">✈️</span>
+            <div>
+              <strong>Non-contiguous territory stops detected:</strong> {names.join(', ')}.<br />
+              <span className="text-xs text-blue-600">These will automatically be placed in their own separate route groups since technicians must fly to these locations. Their drive distances will not be mixed with the contiguous US routes.</span>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="card p-4 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -282,33 +394,54 @@ export default function RoutesPage() {
                   </div>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        {['#','Address','City','State','ZIP'].map((h) => (
-                          <th key={h} className="text-left px-3 py-2 text-slate-500 font-medium">{h}</th>
-                        ))}
-                        <th className="text-left px-3 py-2 text-slate-500 font-medium no-print">Navigate</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {group.addresses.map((a, i) => (
-                        <tr key={a.id} className="hover:bg-slate-50">
-                          <td className="px-3 py-2 text-slate-400 font-mono text-xs">{i + 1}</td>
-                          <td className="px-3 py-2 font-medium">{a.raw || String(a.street ?? '')}</td>
-                          <td className="px-3 py-2 text-slate-600">{String(a.city ?? '')}</td>
-                          <td className="px-3 py-2 text-slate-600">{String(a.state ?? '')}</td>
-                          <td className="px-3 py-2 text-slate-600">{String(a.zip ?? '')}</td>
-                          <td className="px-3 py-2 no-print">
-                            <a href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`}
-                              target="_blank" rel="noreferrer" className="text-blue-500 hover:underline text-xs">
-                              Google Maps ↗
-                            </a>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {(() => {
+                    const extraCols = getExtraColumns(group.addresses);
+                    const hasStore = group.addresses.some((a) => a.storeNumber);
+                    return (
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="text-left px-3 py-2 text-slate-500 font-medium">#</th>
+                            {hasStore && <th className="text-left px-3 py-2 text-blue-600 font-medium bg-blue-50">Store #</th>}
+                            {['Address','City','State','ZIP'].map((h) => (
+                              <th key={h} className="text-left px-3 py-2 text-slate-500 font-medium">{h}</th>
+                            ))}
+                            {extraCols.map((c) => (
+                              <th key={c} className="text-left px-3 py-2 text-slate-400 font-medium text-xs">{c}</th>
+                            ))}
+                            <th className="text-left px-3 py-2 text-slate-500 font-medium no-print">Navigate</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {group.addresses.map((a, i) => (
+                            <tr key={a.id} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 text-slate-400 font-mono text-xs">{i + 1}</td>
+                              {hasStore && (
+                                <td className="px-3 py-2 font-bold text-blue-700 bg-blue-50/50 whitespace-nowrap">
+                                  {a.storeNumber ? `#${a.storeNumber}` : '—'}
+                                </td>
+                              )}
+                              <td className="px-3 py-2 font-medium">{a.raw || String(a.street ?? '')}</td>
+                              <td className="px-3 py-2 text-slate-600">{String(a.city ?? '')}</td>
+                              <td className="px-3 py-2 text-slate-600">{String(a.state ?? '')}</td>
+                              <td className="px-3 py-2 text-slate-600">{String(a.zip ?? '')}</td>
+                              {extraCols.map((c) => (
+                                <td key={c} className="px-3 py-2 text-slate-500 text-xs max-w-[120px] truncate" title={String(a[c] ?? '')}>
+                                  {String(a[c] ?? '')}
+                                </td>
+                              ))}
+                              <td className="px-3 py-2 no-print">
+                                <a href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.raw || '')}`}
+                                  target="_blank" rel="noreferrer" className="text-blue-500 hover:underline text-xs">
+                                  Google Maps ↗
+                                </a>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+                  })()}
                 </div>
               </div>
             );

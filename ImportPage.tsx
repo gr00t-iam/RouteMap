@@ -6,12 +6,26 @@ import { geocodeBatch, geocodeSingle } from './geocoder';
 
 // SheetJS is loaded via CDN in index.html as window.XLSX (no npm package needed)
 
-const APP_FIELDS = ['raw', 'street', 'city', 'state', 'zip'] as const;
+const APP_FIELDS = ['raw', 'street', 'city', 'state', 'zip', 'storeNumber'] as const;
 type AppField = typeof APP_FIELDS[number];
+
+// Standard keys that are NOT from the original spreadsheet columns
+const STANDARD_KEYS = new Set(['id', 'raw', 'street', 'city', 'state', 'zip', 'storeNumber', 'lat', 'lng', 'geocodeStatus']);
+
+/** Return the list of extra (non-standard) column names present across an address list */
+export function getExtraColumns(addresses: Address[]): string[] {
+  const extras = new Set<string>();
+  for (const a of addresses) {
+    for (const k of Object.keys(a)) {
+      if (!STANDARD_KEYS.has(k)) extras.add(k);
+    }
+  }
+  return Array.from(extras);
+}
 
 function autoDetectMapping(headers: string[]): Record<string, AppField> {
   const mapping: Record<string, AppField> = {};
-  const clean = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+  const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
   for (const h of headers) {
     const l = clean(h);
     if (l.includes('street') || l === 'address' || l === 'addr' || l === 'fulladdress' || l === 'location') {
@@ -22,6 +36,12 @@ function autoDetectMapping(headers: string[]): Record<string, AppField> {
       mapping[h] = 'state';
     } else if (l.includes('zip') || l.includes('postal') || l === 'postcode') {
       mapping[h] = 'zip';
+    } else if (
+      l.includes('store') || l.includes('storeid') || l.includes('storenum') ||
+      l.includes('siteid') || l.includes('sitenum') || l.includes('accountnum') ||
+      l.includes('locationid') || l === 'id' || l === 'number' || l === 'num' || l === 'storenum'
+    ) {
+      mapping[h] = 'storeNumber';
     }
   }
   return mapping;
@@ -34,12 +54,13 @@ function rowsToAddresses(rows: Record<string, string>[], mapping: Record<string,
     for (const [col, field] of Object.entries(mapping)) {
       const val = String(row[col] ?? '').trim();
       if (field === 'raw' || field === 'street') a.raw = val;
-      else a[field] = val;
+      else (a as Record<string, unknown>)[field] = val;
     }
     if (!a.raw) {
       const parts = [a.street, a.city, a.state, a.zip].filter(Boolean);
       if (parts.length) a.raw = (parts as string[]).join(', ');
     }
+    // Preserve ALL original columns (extra data for technician sheets)
     for (const [k, v] of Object.entries(row)) {
       if (!(k in a)) a[k] = v;
     }
@@ -254,7 +275,8 @@ export default function ImportPage() {
                     const val = e.target.value as AppField | '';
                     setMapping((p) => { const n = { ...p }; if (val) n[h] = val; else delete n[h]; return n; });
                   }}>
-                  <option value="">— skip —</option>
+                  <option value="">— include as-is (extra data) —</option>
+                  <option value="storeNumber">⭐ Store / Site Number</option>
                   <option value="raw">Full Address / Street</option>
                   <option value="city">City</option>
                   <option value="state">State</option>
@@ -317,10 +339,21 @@ export default function ImportPage() {
 
           <div className="card overflow-hidden">
             <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+              {(() => {
+                const extraCols = getExtraColumns(addresses);
+                const hasStoreNum = addresses.some((a) => a.storeNumber);
+                return (
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 sticky top-0 z-10">
                   <tr>
-                    {['Address','City','State','ZIP','Status','Actions'].map((h) => (
+                    {hasStoreNum && <th className="text-left px-3 py-2 text-slate-500 font-medium bg-blue-50">Store #</th>}
+                    {['Address','City','State','ZIP'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-slate-500 font-medium">{h}</th>
+                    ))}
+                    {extraCols.map((c) => (
+                      <th key={c} className="text-left px-3 py-2 text-slate-400 font-medium text-xs">{c}</th>
+                    ))}
+                    {['Status','Actions'].map((h) => (
                       <th key={h} className="text-left px-3 py-2 text-slate-500 font-medium">{h}</th>
                     ))}
                   </tr>
@@ -332,6 +365,11 @@ export default function ImportPage() {
                     const isPending = a.geocodeStatus === 'pending';
                     return (
                       <tr key={a.id} className={`hover:bg-slate-50 ${isFailed ? 'bg-rose-50/40' : ''}`}>
+                        {hasStoreNum && (
+                          <td className="px-3 py-2 font-bold text-blue-700 bg-blue-50/50 whitespace-nowrap">
+                            {a.storeNumber ? `#${a.storeNumber}` : '—'}
+                          </td>
+                        )}
                         <td className="px-3 py-2 font-medium">
                           {rs?.editing ? (
                             <input
@@ -349,6 +387,11 @@ export default function ImportPage() {
                         <td className="px-3 py-2 text-slate-600">{String(a.city ?? '')}</td>
                         <td className="px-3 py-2 text-slate-600">{String(a.state ?? '')}</td>
                         <td className="px-3 py-2 text-slate-600">{String(a.zip ?? '')}</td>
+                        {extraCols.map((c) => (
+                          <td key={c} className="px-3 py-2 text-slate-500 text-xs max-w-[120px] truncate" title={String(a[c] ?? '')}>
+                            {String(a[c] ?? '')}
+                          </td>
+                        ))}
                         <td className="px-3 py-2">
                           <span className={`badge ${
                             a.geocodeStatus === 'geocoded' ? 'bg-green-100 text-green-700'
@@ -396,6 +439,8 @@ export default function ImportPage() {
                   })}
                 </tbody>
               </table>
+                );
+              })()}
             </div>
           </div>
         </div>
