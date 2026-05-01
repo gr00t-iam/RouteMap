@@ -4,7 +4,7 @@ import ImportPage from '@/pages/ImportPage';
 import TechniciansPage from '@/pages/TechniciansPage';
 import RoutesPage from '@/pages/RoutesPage';
 import SettingsPage from '@/pages/SettingsPage';
-import { isSupabaseConfigured } from '@/lib/supabase';
+
 
 const nav = [
   {
@@ -30,7 +30,7 @@ const nav = [
 ];
 
 export default function App() {
-  const supaReady = isSupabaseConfigured();
+  
   return (
     <div className="flex h-screen overflow-hidden" style={{backgroundColor:'#505a64'}}>
       <aside className="w-56 shrink-0 flex flex-col bg-slate-900 shadow-xl">
@@ -68,11 +68,7 @@ export default function App() {
           <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
             supaReady ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
           }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${supaReady ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-            {supaReady ? 'Supabase connected' : 'Local-only mode'}
-          </div>
-        </div>
-      </aside>
+            </aside>
       <div className="flex-1 flex flex-col overflow-hidden">
         <main className="flex-1 overflow-y-auto">
           <Routes>
