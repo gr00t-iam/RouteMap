@@ -3,15 +3,15 @@
 @tailwind utilities;
 
 html, body, #root { height: 100%; }
-
 .leaflet-container { height: 100%; width: 100%; }
 
-/* Subtle modern card */
-.card { @apply bg-white border border-slate-200 rounded-xl shadow-sm; }
-.btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition; }
-.btn-primary { @apply btn bg-brand-500 text-white hover:bg-brand-600; }
-.btn-ghost { @apply btn text-slate-700 hover:bg-slate-100; }
-.btn-danger { @apply btn bg-rose-600 text-white hover:bg-rose-700; }
-.input { @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none; }
-.label { @apply text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1 block; }
-.badge { @apply inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700; }
+@layer components {
+  .card    { @apply bg-white border border-slate-200 rounded-xl shadow-sm; }
+  .btn     { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors; }
+  .btn-primary { @apply btn bg-brand-500 text-white hover:bg-brand-600; }
+  .btn-ghost   { @apply btn text-slate-700 hover:bg-slate-100; }
+  .btn-danger  { @apply btn bg-rose-600 text-white hover:bg-rose-700; }
+  .input  { @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none; }
+  .label  { @apply text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1 block; }
+  .badge  { @apply inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700; }
+}
