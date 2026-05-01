@@ -1,0 +1,59 @@
+# Builds the Vite app and deploys it to GitHub Pages on every push to main.
+#
+# One-time setup (in your repo):
+#   1. Settings  ->  Pages  ->  Source: "GitHub Actions"
+#   2. Settings  ->  Secrets and variables  ->  Actions  ->  New repository secret
+#        VITE_SUPABASE_URL          (your Supabase project URL)
+#        VITE_SUPABASE_ANON_KEY     (your Supabase anon key)
+#        VITE_OSRM_URL              (optional; defaults to public demo)
+#
+# After the first successful run, your app is live at:
+#   https://<github-username>.github.io/<repo-name>/
+
+name: Deploy to GitHub Pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build
+        env:
+          # Vite needs the base path to match "/<repo>/" on github.io
+          GHP_BASE: /${{ github.event.repository.name }}/
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_OSRM_URL: ${{ secrets.VITE_OSRM_URL }}
+        run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
