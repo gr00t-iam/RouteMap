@@ -1,0 +1,12 @@
+Run this command in your RouteMap repo folder before committing:
+
+  npm install xlsx jspdf jspdf-autotable
+
+These packages are required for:
+  - xlsx         → Import .xlsx/.xls files + Export Excel spreadsheets per technician
+  - jspdf        → Generate PDF route sheets per technician
+  - jspdf-autotable → Formatted tables inside the PDF
+
+papaparse is already in your project (used for CSV parsing).
+
+After installing, commit all files from this folder to your repo root.
